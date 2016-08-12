@@ -6,6 +6,15 @@ package com.dasea.ndkjnidemo;
  *
  */
 public class JniData {
+	static {
+        init();
+    }
+
+    /**
+     * 缓存类及其字段
+     */
+    private native static void init();
+    
     public boolean bData;
     public double dData;
     public int iData;

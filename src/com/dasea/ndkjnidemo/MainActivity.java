@@ -1,7 +1,10 @@
 package com.dasea.ndkjnidemo;
 
+import java.nio.ByteBuffer;
+
 import android.app.Activity;
 import android.os.Bundle;
+import android.text.StaticLayout;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -26,6 +29,10 @@ public class MainActivity extends Activity {
     Button testStrDataRetByParamButton = null;
     Button testObjDataRetByParamButton = null;
     Button testArrDataRetByParamButton = null;
+    Button testCppCallJavaButton = null;
+    Button testDynamicRegisterButton = null;
+    Button testDirectBufferButton = null;
+    ByteBuffer directBuffer = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -74,6 +81,15 @@ public class MainActivity extends Activity {
         
         testArrDataRetByParamButton = (Button)findViewById(R.id.button14);
         testArrDataRetByParamButton.setOnClickListener(new ArrDataRetByParamOnClickListener());
+        
+        testCppCallJavaButton = (Button)findViewById(R.id.button15);
+        testCppCallJavaButton.setOnClickListener(new CppCallJavaOnClickListener());
+        
+        testDynamicRegisterButton = (Button)findViewById(R.id.button16);
+        testDynamicRegisterButton.setOnClickListener(new DynamicRegisterOnClickListener());
+        
+        testDirectBufferButton = (Button)findViewById(R.id.button17);
+        testDirectBufferButton.setOnClickListener(new DirectBufferOnClickListener());
     }
 
     @Override
@@ -243,6 +259,55 @@ public class MainActivity extends Activity {
                 msg = msg + arrInt[i] + ", ";
             }
             Log.d("JniDemo", msg);
+        }
+    }
+    
+    // 主要用于测试c++调用java的接口的
+    public class CppCallJavaOnClickListener implements OnClickListener {
+        @Override
+        public void onClick(View arg0) {
+            jniDemo.testCppCallJava();
+        }
+    }
+    
+    // 主要用于测试c++调用java的接口的
+    public class DynamicRegisterOnClickListener implements OnClickListener {
+        @Override
+        public void onClick(View arg0) {
+        	String retString = jniDemo.testDynamicRegister();
+        	Log.d("JniDemo", "c++端返回的字符串: " + retString);
+        }
+    }
+    
+    // 主要用于测试Direct Buffer
+    public class DirectBufferOnClickListener implements OnClickListener {
+        @Override
+        public void onClick(View arg0) {
+        	if (null == directBuffer) {	
+	        	directBuffer = ByteBuffer.allocateDirect(1024);
+	        	if (null == directBuffer) {
+					Log.d("JniDemo", "分配Direct Buffer失败!");
+					return ;
+				}
+	        	
+	        	directBuffer.putChar('a');
+	        	directBuffer.putChar('c');
+	        	directBuffer.putChar('d');
+	        	directBuffer.putChar('d');
+	        	directBuffer.putChar('w');
+	        	directBuffer.putChar('j');
+	        	directBuffer.putChar('l');
+	        	jniDemo.setDirectBuffer(directBuffer, directBuffer.capacity());
+        	}else{
+        		directBuffer.putChar(';');
+	        	directBuffer.putChar('a');
+	        	directBuffer.putChar('h');
+	        	directBuffer.putChar('t');
+	        	directBuffer.putChar('6');
+	        	directBuffer.putChar('2');
+	        	directBuffer.putChar('8');
+        		jniDemo.testDirectBufferContext(7);
+        	}
         }
     }
 }

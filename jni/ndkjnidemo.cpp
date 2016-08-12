@@ -1,14 +1,161 @@
 #include "ndkjnidemo.h"
+#include "JniHelper.h"
+#include "JniCache.h"
+#include "dynamic_jnidemo.h"
 #include <cstring>
+#include <cstdio>
 
 #ifndef NULL
 #define NULL (0)
 #endif
 
+///////////////////////////////////////////////////////////////////////
+// 由于有些native的方法实在太丑太长, 所以, 可以用动态注册的方法将方法
+// 搞短一点
+///////////////////////////////////////////////////////////////////////
+// 具体参考dynamic_jnidemo.h和cpp实现
+
+// 主要缓存c++要调用的java端的方法
+static struct JNativeMgr g_nativeMgr;
+
+// 缓存俩端需要频繁使用的数据类
+static struct JniTestData g_jniData;
+
+// 多线程中调用java端方法时, 需要进行线程绑定
+// 线程函数
+void* thread_func(void* args) {
+    // 刷新画面
+    JavaVM *vm = JniHelper::getJavaVM();
+    if(NULL == vm){
+        LOGD_D("Failed to get jni enviroment!");
+        pthread_exit((void*)2);
+    }
+
+    // 直接attach 当前线程到vm中
+    JNIEnv* env = NULL;
+    int status = -1;
+    status = vm->AttachCurrentThread(&env, NULL);
+    if (0 > status) {
+        LOGD_D("Failed to attach to current thread, give up operator!");
+        status = -1;
+        pthread_exit((void*)3);
+    } else {
+        status = 0;
+    }
+
+    // 调用java端接口
+    env->CallStaticVoidMethod(g_nativeMgr._jnativeMgr, g_nativeMgr._jtestvoidfunc, 100.11, 2013.44);
+
+    // 解除线程引用
+    vm->DetachCurrentThread();
+    pthread_exit((void*)0);
+}
+
+// 缓存数据
+// 需要频繁调用的类, 方法或者字段, 可以考虑将他们缓存下来, 已结省开销
+JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniData_init(
+                                                              JNIEnv* env, jobject obj) {
+    LOGD_D("=====================testObjectData begin==========================");
+    jclass jJniData = env->FindClass("com/dasea/ndkjnidemo/JniData");
+    if(NULL == jJniData) {
+        LOGD_D("Not find class!");
+        return ;
+    }
+    g_jniData._jJniData = (jclass) env->NewGlobalRef(jJniData);
+
+    jfieldID jbData = env->GetFieldID(jJniData, "bData", "Z");
+    jfieldID jdData = env->GetFieldID(jJniData, "dData", "D");
+    jfieldID jiData = env->GetFieldID(jJniData, "iData", "I");
+    jfieldID jcData = env->GetFieldID(jJniData, "cData", "B");
+    jfieldID jsData = env->GetFieldID(jJniData, "sData", "Ljava/lang/String;");
+    jfieldID jbyteArr = env->GetFieldID(jJniData, "byteArr", "[B");
+    jfieldID jintArr = env->GetFieldID(jJniData, "intArr", "[I");
+
+    g_jniData._jbdata = jbData;
+    g_jniData._jdData = jdData;
+    g_jniData._jiData = jiData;
+    g_jniData._jcData = jcData;
+    g_jniData._jsData = jsData;
+    g_jniData._jbyteArr = jbyteArr;
+    g_jniData._jintArr = jintArr;
+
+    env->DeleteLocalRef(jJniData);
+
+    // 后面就可以在GetIntField, SetIntField等的时候使用
+}
+
+// 要调用的方法的缓冲
+bool MethodInit(JNIEnv* env) {
+    // STEP 1/3 : Load the class id
+    jclass jnativeMgr = NULL;
+    jnativeMgr = env->FindClass("com/dasea/ndkjnidemo/JniDemo");
+    if((NULL == jnativeMgr) || env->ExceptionOccurred()){
+        LOGD_D("Find RTKNativeManager class failed!");
+        return false;
+    }
+
+    // STEP 2/3 : Assign the ClassId as a Global Reference
+    g_nativeMgr._jnativeMgr = (jclass) env->NewGlobalRef(jnativeMgr);
+
+    // 获取methodID
+	// 获取静态方法
+	jmethodID staticMethodID = env->GetStaticMethodID(jnativeMgr, "testvoidfunc", "(DF)V");
+	// 获取一般方法
+	jmethodID basicDataID = env->GetMethodID(jnativeMgr, "testC2JByBasicData", "(DF)I");
+	jmethodID arrDataID = env->GetMethodID(jnativeMgr, "testC2JByArrData", "(S)[B");
+	jmethodID strDataID = env->GetMethodID(jnativeMgr, "testC2JByStrData", "(ILcom/dasea/ndkjnidemo/JniData;D)Ljava/util/String;");
+	jmethodID strArrDataID = env->GetMethodID(jnativeMgr, "testC2JByStrArr", "(Ljava/util/String;)[Ljava/util/String;");
+	jmethodID objDataID = env->GetMethodID(jnativeMgr, "testC2JByObjData", "(Ljava/util/String;)Lcom/dasea/ndkjnidemo/JniData;");
+	jmethodID objArrDataID = env->GetMethodID(jnativeMgr, "testC2JByObjArr", "()[Lcom/dasea/ndkjnidemo/JniData;");
+
+    g_nativeMgr._jtestvoidfunc = staticMethodID;
+    g_nativeMgr._jtestC2JByBasicData = basicDataID;
+    g_nativeMgr._jtestC2JByArrData = arrDataID;
+    g_nativeMgr._jtestC2JByStrData = strDataID;
+    g_nativeMgr._jtestC2JByStrArr = strArrDataID;
+    g_nativeMgr._jtestC2JByObjData = objDataID;
+    g_nativeMgr._jtestC2JByObjArr = objArrDataID;
+
+    // STEP 3/3 : Delete the no longer needed local reference
+    env->DeleteLocalRef(jnativeMgr);
+
+    return true;
+}
+
+/* 保存当前的vm环境, 如果c++端需要调用java的函数, 则需要保存vm
+* 使用JniHelper类, 由Cocos-2D
+* System.loadLibrary("lib")时调用
+* 如果成功返回JNI版本, 失败返回-1
+*/
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+	JniHelper::setJavaVM(vm);
+
+    JNIEnv* env = NULL;
+    jint result = -1;
+
+    if (vm->GetEnv((void**)&env, JNI_VERSION_1_4) != JNI_OK) {
+        return -1;
+    }
+
+    if (NULL == env) {
+    	LOGD_D("获取env失败!");
+    	return -1;
+    }
+
+    if (!registerNatives(env)) {//注册
+        return -1;
+    }
+    LOGD_D("注册方法成功");
+    //成功
+    result = JNI_VERSION_1_4;
+
+    return result;
+}
+
 // 测试参数
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testBasicData(
-        JNIEnv* env, jobject obj, jboolean jb, jint ji, jdouble jd, jstring js){
-    union 
+                                                                       JNIEnv* env, jobject obj, jboolean jb, jint ji, jdouble jd, jstring js){
+    union{
         unsigned int a;
         unsigned char b;
     }c;
@@ -27,7 +174,7 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testBasicData(
     LOGD_D("u4: %x", dec);
 
     LOGD_D("BasicData: boolean: %d; int:%d, double: %f",
-            jb, (int)ji, (double)jd);
+           jb, (int)ji, (double)jd);
 
     LOGD_D("=====================testBasicData begin==========================");
     // String UTF-8
@@ -45,7 +192,7 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testBasicData(
 }
 
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjectData(
-        JNIEnv* env, jobject obj, jobject jobjData) {
+                                                                        JNIEnv* env, jobject obj, jobject jobjData) {
     LOGD_D("=====================testObjectData begin==========================");
     jclass jJniData = env->FindClass("com/dasea/ndkjnidemo/JniData");
     if(NULL == jJniData) {
@@ -104,7 +251,7 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjectData(
 }
 
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testBasicArrData(
-        JNIEnv* env, jobject obj, jintArray jarrData) {
+                                                                          JNIEnv* env, jobject obj, jintArray jarrData) {
     LOGD_D("=====================testBasicArrData begin==========================");
     jboolean isCopy = JNI_FALSE;
     int* bytes = env->GetIntArrayElements(jarrData, &isCopy);
@@ -118,7 +265,7 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testBasicArrData(
 }
 
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testStringArrData(
-        JNIEnv* env, jobject obj, jobjectArray jarrData) {
+                                                                           JNIEnv* env, jobject obj, jobjectArray jarrData) {
     LOGD_D("=====================testStringArrData begin==========================");
     jstring jstrData = NULL;
     int size = env->GetArrayLength(jarrData);
@@ -137,7 +284,7 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testStringArrData(
 }
 
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjectArrData(
-        JNIEnv* env, jobject obj, jobjectArray jarrData) {
+                                                                           JNIEnv* env, jobject obj, jobjectArray jarrData) {
     LOGD_D("=====================testObjectArrData begin==========================");
     // 类
     jclass jJniData = env->FindClass("com/dasea/ndkjnidemo/JniData");
@@ -178,14 +325,14 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjectArrData(
 
 // 测试返回值
 JNIEXPORT jint JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testBasicDataRet(
-        JNIEnv* env, jobject obj) {
+                                                                          JNIEnv* env, jobject obj) {
     LOGD_D("=====================testBasicDataRet begin==========================");
     LOGD_D("=====================testBasicDataRet end==========================");
     return (28);
 }
 
 JNIEXPORT jstring JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testStringDataRet(
-        JNIEnv* env, jobject obj) {
+                                                                              JNIEnv* env, jobject obj) {
     LOGD_D("=====================testStringDataRet begin==========================");
     jstring jstr = env->NewStringUTF("这是从c++端返回的string测试数据!");
     // env->DeleteLocalRef(jstr); // 是否需要? 待考察, 关于local reference的问题
@@ -197,7 +344,7 @@ JNIEXPORT jstring JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testStringDataRet(
 }
 
 JNIEXPORT jobject JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjectDataRet(
-        JNIEnv* env, jobject obj) {
+                                                                              JNIEnv* env, jobject obj) {
     LOGD_D("=====================testObjDataRet end==========================");
     // 类
     jclass jJniData = env->FindClass("com/dasea/ndkjnidemo/JniData");
@@ -247,7 +394,7 @@ JNIEXPORT jobject JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjectDataRet(
 }
 
 JNIEXPORT jintArray JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testBasicDataArrRet(
-        JNIEnv* env, jobject obj) {
+                                                                                  JNIEnv* env, jobject obj) {
     LOGD_D("=====================testBasicDataArrRet end==========================");
     jintArray jintArr = env->NewIntArray(10);
     int  iArr[11] = {123, 124, 345, 664, 553, 222, 445, 167, 876, 548};
@@ -257,7 +404,7 @@ JNIEXPORT jintArray JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testBasicDataArrRe
 }
 
 JNIEXPORT jobjectArray JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testStrDataArrRet(
-        JNIEnv* env, jobject obj) {
+                                                                                   JNIEnv* env, jobject obj) {
     LOGD_D("=====================testStrDataArrRet begin 11==========================");
     jstring jstrObj = env->NewStringUTF("测试string数组返回的 -> 1");
     jobjectArray jstrArr = env->NewObjectArray(3, env->GetObjectClass(jstrObj), jstrObj);
@@ -273,7 +420,7 @@ JNIEXPORT jobjectArray JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testStrDataArrR
 }
 
 JNIEXPORT jobjectArray JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjDataArrRet(
-        JNIEnv* env, jobject obj) {
+                                                                                   JNIEnv* env, jobject obj) {
     LOGD_D("=====================testObjDataArrRet begin==========================");
     // 类
     jclass jJniData = env->FindClass("com/dasea/ndkjnidemo/JniData");
@@ -327,7 +474,7 @@ JNIEXPORT jobjectArray JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjDataArrR
 
 // 测试用参数返回数据
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testStrDataRetByParam(
-        JNIEnv* env, jobject obj, jstring jstrRet) {
+                                                                               JNIEnv* env, jobject obj, jstring jstrRet) {
     LOGD_D("=====================testStrDataRetByParam end==========================");
     jboolean isCopy = JNI_FALSE;
     char* str = const_cast<char*>(env->GetStringUTFChars(jstrRet, &isCopy));
@@ -341,7 +488,7 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testStrDataRetByParam(
     LOGD_D("=====================testStrDataRetByParam end==========================");
 }
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjDataRetByParam(
-        JNIEnv* env, jobject obj, jobject jobjRet) {
+                                                                               JNIEnv* env, jobject obj, jobject jobjRet) {
     LOGD_D("=====================testObjDataRetByParam end==========================");
     // 类
     jclass jJniData = env->FindClass("com/dasea/ndkjnidemo/JniData");
@@ -381,7 +528,7 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjDataRetByParam(
 }
 
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testArrDataRetByParam(
-        JNIEnv* env, jobject obj, jintArray jarrData, jint jarrLen) {
+                                                                               JNIEnv* env, jobject obj, jintArray jarrData, jint jarrLen) {
     LOGD_D("=====================testArrDataRetByParam end==========================");
     int len = jarrLen;
 
@@ -404,4 +551,106 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testArrDataRetByParam(
 
     env->SetIntArrayRegion(jarrData, 0, len, iArr);
     LOGD_D("=====================testArrDataRetByParam end==========================");
+}
+
+JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testCppCallJava(
+                                                                         JNIEnv* env, jobject obj) {
+    LOGD_D("=====================测试c++调用java开始==========================");
+
+    // 找到类
+    jclass jJniDemo = env->FindClass("com/dasea/ndkjnidemo/JniDemo");
+    if(NULL == jJniDemo) {
+        LOGD_D("Not find class!");
+        return ;
+    }
+
+    // 获取methodID
+    // 获取静态方法
+    jmethodID staticMethodID = env->GetStaticMethodID(jJniDemo, "testvoidfunc", "(DF)V");
+    // 获取一般方法
+    jmethodID basicDataID = env->GetMethodID(jJniDemo, "testC2JByBasicData", "(DF)I");
+    jmethodID arrDataID = env->GetMethodID(jJniDemo, "testC2JByArrData", "(S)[B");
+    //String testC2JByStrData(int index, JniData objData, double value)
+    jmethodID strDataID = env->GetMethodID(jJniDemo, "testC2JByStrData", "(ILcom/dasea/ndkjnidemo/JniData;D)Ljava/lang/String;");
+    jmethodID strArrDataID = env->GetMethodID(jJniDemo, "testC2JByStrArr", "(Ljava/lang/String;)[Ljava/lang/String;");
+    jmethodID objDataID = env->GetMethodID(jJniDemo, "testC2JByObjData", "(Ljava/lang/String;)Lcom/dasea/ndkjnidemo/JniData;");
+    jmethodID objArrDataID = env->GetMethodID(jJniDemo, "testC2JByObjArr", "()[Lcom/dasea/ndkjnidemo/JniData;");
+
+
+    // 测试调用静态函数: 不需要实例
+    env->CallStaticVoidMethod(jJniDemo, staticMethodID, 100.11, 2013.44);
+
+    // 测试调用基本函数: 调用此类函数需要有一个实例, 直接用obj即可
+    // 测试基本函数
+    int retI = env->CallIntMethod(obj, basicDataID, 200.222, 222.221);
+    LOGD_D("返回的int数字为: %d", retI);
+
+    // 测试testC2JByArrData
+    jbyteArray retBArr = (jbyteArray)env->CallObjectMethod(obj, arrDataID, 3234);
+
+    // 测试testC2JByStrData
+    {
+        // 类
+        jclass jJniData = env->FindClass("com/dasea/ndkjnidemo/JniData");
+        if(NULL == jJniData) {
+            LOGD_D("Not find class!");
+            return ;
+        }
+        // 构造函数
+        jmethodID initID = env->GetMethodID(jJniData, "<init>", "()V");
+        jobject jresult = env->NewObject(jJniData, initID);
+        if (NULL == jresult || env->ExceptionOccurred()) {
+            LOGD_D("Construct object failed!");
+            return  ;
+        }
+        jfieldID jdData = env->GetFieldID(jJniData, "dData", "D");
+        jfieldID jiData = env->GetFieldID(jJniData, "iData", "I");
+        jfieldID jcData = env->GetFieldID(jJniData, "cData", "B");
+        // 设置基本类型的内容
+        env->SetDoubleField(jresult, jdData, 30.240182372);
+        env->SetIntField(jresult, jiData, 4457);
+        env->SetByteField(jresult, jcData, 87);
+
+        jstring retStr = (jstring)env->CallObjectMethod(obj, strDataID, 10, jresult, 100.87);
+        jboolean isCopy = JNI_FALSE;
+        const char* strCh = (const char*)env->GetStringUTFChars(retStr, &isCopy);
+        int strSize = env->GetStringUTFLength(retStr);
+        LOGD_D("String: %s, size is: %d", strCh, strSize);
+        env->ReleaseStringUTFChars(retStr, strCh);
+        env->DeleteLocalRef(jresult);
+    }
+
+    // 测试testC2JByStrArr
+    {
+    }
+
+    LOGD_D("=====================测试c++调用java结束==========================");
+}
+
+unsigned char* g_directBuff = NULL;
+int g_bufferLen = 0;
+// 测试Direct Buffer
+JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_setDirectBuffer(
+        JNIEnv* env, jobject obj, jobject jdirectBuff, jint jcapacity) {
+	void* buffer = env->GetDirectBufferAddress(jdirectBuff);
+	if (NULL == buffer) {
+		LOGD_D("natilayer->setImageDirectBuffer ->Invalid buffer!");
+		return ;
+	}
+	g_bufferLen = static_cast<int>(jcapacity);
+	g_directBuff = static_cast<unsigned char*>(buffer);
+
+	// 好像是二进制的, 不能显示, 我去
+	for(int i = 0; i < 20; ++i) {
+		LOGD_D("Buffer里面的数据为: %d", g_directBuff[i]);
+	}
+	LOGD_D("Buffer里面的数据为: %s, 容量为: %d", g_directBuff, g_bufferLen);
+}
+JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testDirectBufferContext(
+        JNIEnv* env, jobject obj, jint jlen) {
+	int len = jlen;
+	LOGD_D("有效数据长度为: %d", len);
+	for(int i = 0; i < 40; ++i) {
+		LOGD_D("Buffer里面的数据为: %d", g_directBuff[i]);
+	}
 }

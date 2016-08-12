@@ -14,6 +14,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniData_init(
+        JNIEnv* env, jobject obj);
 
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testBasicData(
         JNIEnv* env, jobject obj, jboolean jb, jint ji, jdouble jd, jstring js);
@@ -46,6 +48,16 @@ JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testObjDataRetByParam(
         JNIEnv* env, jobject obj, jobject jobjRet);
 JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testArrDataRetByParam(
         JNIEnv* env, jobject obj, jintArray jarrData, jint jarrLen);
+
+// 测试Direct Buffer
+JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_setDirectBuffer(
+        JNIEnv* env, jobject obj, jobject jdirectBuff, jint jcapacity);
+JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testDirectBufferContext(
+        JNIEnv* env, jobject obj, jint jlen);
+
+// c++ 调用java端代码
+JNIEXPORT void JNICALL Java_com_dasea_ndkjnidemo_JniDemo_testCppCallJava(
+        JNIEnv* env, jobject obj);
 
 #ifdef __cplusplus
 }
